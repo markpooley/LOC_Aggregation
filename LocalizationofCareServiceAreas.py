@@ -2,8 +2,8 @@
 # ---------------------------------------------------------------------------
 # LocalizationofCareServiceAreas.py
 # Created by: Mark Pooley
-# This script does a lot of fancy stuff 
-# Description: 
+# Description: This script takes DSAs below a user defined threshold and aggregates them to a neighboring DSA using visits occuring between the two
+# and assigns to the best neighbor
 # ---------------------------------------------------------------------------
 
 # Import arcpy module
@@ -79,7 +79,8 @@ DSA_Revised_List = []
 arcpy.SetProgressorPosition(3)
 arcpy.ResetProgressor()  
 
-
+#list to track DSAs that have been removed
+removeList = []
 
 arcpy.SetProgressor("step","Reassiging DSAs",0,len(DSA_List),1)
 #loop to reassign all the DSAs that are below the user specified threshold criteria
@@ -162,54 +163,65 @@ for i in range(0,len(DSA_List)):
     
     #create temp dictionary and counter that will be used to pull the maximum
     #visits in the dyad and then write it to the DSA_Revised Attribute
-    TempDict = {}
+    tempDict = {}
     count = 0
        
     for i in Dyad_List:
-        TempDict[i] = Visits_Dyad_List[count]
+        tempDict[i] = Visits_Dyad_List[count]
         count = count + 1
     
-    #Return key value for the maximum number of Dyad Visits and ensure it's a string       
-    maxDSA = (max(TempDict, key = TempDict.get))        
-    maxDSA = str(maxDSA)    
-  
-
-    #Check to see if DSA has already been reassigned, if so reassign it.
-    CheckClause = DSA_Field +' = '+ "'" + maxDSA + "'"
-    check_Cursor = arcpy.da.SearchCursor(Adjacent_Selection,DSARevised_Field,CheckClause)
-    
-      
-    checkList = []
-    for i in check_Cursor:
-        checkList.append(str(i).strip("()u,'"))
+    #check if the currention dictionary is empty, this would be caused by no visits occuring between the current seed any any adjacent DSAs.
+    #if this is the case, the current DSA is removed from the DSA List 
+    if bool(tempDict) == False:
+        #if empty append to removeList
+        removeList.append(currentDSA)
+        #remove current seed from seed list
+        del DSA_List[DSA_List.index(currentDSA)]
         
-    
+        arcpy.AddMessage("Seed Zip: " + str(currentDSA) + " removed due to generating an empty dictionary...")
 
-    #!!!make sure maxDSA doesn't equal "null", otherwise calcualte field will cause a problem.
-    
-    if checkList[0] != 'None':
-        
-        maxDSA = str(checkList[0])
-    
+    #Return key value for the maximum number of Dyad Visits and ensure it's a string
+    else:      
+        maxDSA = (max(tempDict, key = tempDict.get))        
+        maxDSA = str(maxDSA)    
       
-    #Add DSA to a List  and dictionary to track it
-    DSA_Revised_List.append(maxDSA)
-    AssignedDict[currentDSA] = maxDSA
 
-    arcpy.SetProgressorLabel(str(currentDSA) + " reassinged to " + str(maxDSA))
-   
+        #Check to see if DSA has already been reassigned, if so reassign it.
+        CheckClause = DSA_Field +' = '+ "'" + maxDSA + "'"
+        check_Cursor = arcpy.da.SearchCursor(Adjacent_Selection,DSARevised_Field,CheckClause)
+        
+          
+        checkList = []
+        for i in check_Cursor:
+            checkList.append(str(i).strip("()u,'"))
+            
+        
+
+        #!!!make sure maxDSA doesn't equal "null", otherwise calcualte field will cause a problem.
+        
+        if checkList[0] != 'None':
+            
+            maxDSA = str(checkList[0])
+        
+          
+        #Add DSA to a List  and dictionary to track it
+        DSA_Revised_List.append(maxDSA)
+        AssignedDict[currentDSA] = maxDSA
+
+        arcpy.SetProgressorLabel(str(currentDSA) + " reassinged to " + str(maxDSA))
+       
 
 
-    #create a check that uses a populated list of DSAs that have been reassigned and their corresponeding reassignments to check
-    #if the current maxDSA has already been reassigned
+        #create a check that uses a populated list of DSAs that have been reassigned and their corresponeding reassignments to check
+        #if the current maxDSA has already been reassigned
 
-    #Select the DSA that was originally in need of Reassignment
-    ReAssignSelection = arcpy.SelectLayerByAttribute_management(FeatureLayer,"NEW_SELECTION",whereClause)
-    
-    #Assign the proper Adjacent DSA to the currently selected DSA
-    arcpy.CalculateField_management(FeatureLayer,DSARevised_Field,maxDSA,"PYTHON_9.3","#") 
+        #Select the DSA that was originally in need of Reassignment
+        ReAssignSelection = arcpy.SelectLayerByAttribute_management(FeatureLayer,"NEW_SELECTION",whereClause)
+        
+        #Assign the proper Adjacent DSA to the currently selected DSA
+        arcpy.CalculateField_management(FeatureLayer,DSARevised_Field,maxDSA,"PYTHON_9.3","#") 
 
-    arcpy.SetProgressorPosition()
+        arcpy.SetProgressorPosition()
 
 arcpy.AddMessage("Checking for DSAs that were assigned to a Service Area that was later reassigned...")
 #List of DSA's that where assigned to DSA that was reassigned later 
