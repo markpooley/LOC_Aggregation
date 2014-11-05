@@ -10,8 +10,6 @@
 import arcpy
 from arcpy import env
 import numpy
-env.workspace = arcpy.GetParameterAsText(10)
-env.overwriteOutput = True
 
 # Local variables that should be loaded into ArcMap prior to running the script
 #These will be changed to "get parameter as text" so the user can define what
@@ -24,30 +22,39 @@ DSARec_Field = arcpy.GetParameterAsText(4)
 DSAProv_Field = arcpy.GetParameterAsText(5)
 VisitsDyad_Field = arcpy.GetParameterAsText(6)
 Threshold = arcpy.GetParameterAsText(7)
+
 IowaBorder = arcpy.GetParameterAsText(8)
 ZCTAs = arcpy.GetParameterAsText(9)
-OutputName = arcpy.GetParameterAsText(11)
-CrosswalkOutput = arcpy.GetParameterAsText(12)
-CrosswalkTable = arcpy.GetParameterAsText(13)
+OutputLocation = arcpy.GetParameterAsText(10)
+CrosswalkOutput = arcpy.GetParameterAsText(11)
+CrosswalkTable = arcpy.GetParameterAsText(12)
+env.workspace = arcpy.GetParameterAsText(13)
 OutputLocation = env.workspace
+env.overwriteOutput = True
 
 #Sort the initial dataset by LOC so DSAs will be appended to a list in ascending order
 #of LOC. The cursor selects all DSAs with an LOC below the defined threshold value
 arcpy.SetProgressor("step","Setting up data...",0,3,1)
 OriginalSA = arcpy.Sort_management(OriginalSA,"Temp_shapeFileSorted",[[LOC_Field,"ASCENDING"]])
 
+ThresholdString = float(Threshold) * 100
+ThresholdString = str(int(ThresholdString))
 #add DSA Revised field that will be used to reassign DSAs
-arcpy.AddMessage("Creating 'DSA_Revised' field that will be used for reassignment.")
-arcpy.AddField_management(OriginalSA,"DSA_Revised","TEXT")
+arcpy.AddMessage("Creating 'DSA_Revised_" + str(ThresholdString) + "pct' field that will be used for reassignment.")
+DSA_RevisedString = "DSA_Revised_" + str(ThresholdString) + "pct" #create a string for a field name generated from user defined threshold
+arcpy.AddField_management(OriginalSA,DSA_RevisedString,"TEXT")
+
 #Selection clause used to populate DSA_Revised field
 whereClause_UpdateCursor = LOC_Field + ">" + str(Threshold)
 
-with arcpy.da.UpdateCursor(OriginalSA,[DSA_Field,"DSA_Revised"],whereClause_UpdateCursor) as DSA_updateCursor:
+OriginalSA_FieldList = [f.name for f in arcpy.ListFields(OriginalSA,"*")] #create a list of fields from the input file
+arcpy.AddMessage("field list: " + str(OriginalSA_FieldList))
+
+with arcpy.da.UpdateCursor(OriginalSA,OriginalSA_FieldList,whereClause_UpdateCursor) as DSA_updateCursor:
     arcpy.AddMessage("Populating DSA_Revised field with DSAs above the LOC: " + str(Threshold))
     for row in DSA_updateCursor:
         #Populate DSA_Revised field with DSAs that are above the user specified threshold
-
-        row[1] = row[0]
+        row[OriginalSA_FieldList.index(DSA_RevisedString)] = row[OriginalSA_FieldList.index(DSA_Field)]
         DSA_updateCursor.updateRow(row)
 
 DSARevised_Field = "DSA_Revised" # string variable to make selection clauses easier
@@ -55,15 +62,14 @@ DSARevised_Field = "DSA_Revised" # string variable to make selection clauses eas
 arcpy.SetProgressorPosition(1)
 arcpy.AddMessage("Finding DSAs in need of reassignment...")
 
-#cursor used to iterate through current list and create a list of DSAs in need of reassignment
-cursor = arcpy.da.SearchCursor(OriginalSA,DSA_Field,LOC_Field + ' < ' + str(Threshold))   
-#temp list to append all the DSA's in need of reassignment to. This list isn't need, its'
-#just an intermediate list that is needed
+#create a list of all the DSAs in need of reassignment
 DSA_List = []
-for i in cursor:
-    #append the cleaned numgers (removes characters from the unicode string)
-    DSA_List.append(str(i)[3:8])
 
+#cursor used to iterate through current list and create a list of DSAs in need of reassignment
+with arcpy.da.SearchCursor(OriginalSA,DSA_Field,LOC_Field + ' < ' + str(Threshold)) as cursor:
+    for row in cursor:
+        DSA_List.append(row[0]) 
+#temp list to append all the DSA's in need of reassignment to. This list isn't need, its'
 arcpy.AddMessage(str(len(DSA_List)) + " DSAs are in need of reassignment.")
 
 arcpy.SetProgressorPosition(2)
@@ -72,10 +78,10 @@ arcpy.SetProgressorPosition(2)
 #adjacent features on a "regular" shapefile.
 FeatureLayer = arcpy.MakeFeatureLayer_management(OriginalSA,"Temporary_Layer")
 
-#create a dictionary that will house the DSAs that have been reassigned and what they've been
-#reassigned to
-AssignedDict ={}
+AssignedDict ={} #create a dictionary that will house the DSAs that have been reassigned and what they've been reassigned to
+DoubleCheckDict = {} #dicationary that will be used to contain DSA reassigned to another DSA that is in need of reassignment
 DSA_Revised_List = []
+Change_List = [] #list to append DSA that will need to be re-evaluated
 arcpy.SetProgressorPosition(3)
 arcpy.ResetProgressor()  
 
@@ -93,7 +99,18 @@ for i in range(0,len(DSA_List)):
     
     #where clause for the current DSA in need of Reassignment to be used in later 
     #selections.
-    whereClause = DSA_Field+ ' = '+ "'" + str(currentDSA) + "'"
+    whereClause ='"' + DSA_Field + " = "+ "'" + str(currentDSA) + "'" + '"'
+    arcpy.AddMessage("current selection clause: " + str(whereClause))
+
+    #create field list
+    FieldList = [f.name for f in arcpy.ListFields(OriginalSA,"*")]
+    arcpy.AddMessage("field list of original sa" + str(FieldList))
+    
+    with arcpy.da.SearchCursor(OriginalSA,FieldList,whereClause):
+        for row in cursor:
+            
+            currentDSA_Patients_In = row[FieldList.index("Patients_In")]
+            currentDSA_Patients_Total = row[FieldList.index("Patients_Total")]
     
     #DSA Rec Clause that will be used for selection in the DYAD Table later
     DSA_RecClause = DSARec_Field + " = " + currentDSA 
@@ -109,128 +126,59 @@ for i in range(0,len(DSA_List)):
     #Select adjacent features with boundaries touching DSA in Question
     Adjacent_Selection = arcpy.SelectLayerByLocation_management(FeatureLayer,"BOUNDARY_TOUCHES",selection,"#","NEW_SELECTION")
     
-    #cursor to select the adjacent polygons that aren't the current Service Area
-    DSA_cursor = arcpy.da.SearchCursor(Adjacent_Selection,DSA_Field, whereNotClause)
-    
-    #create a temp list of the adjacent DSA's and append them to a list and clean them
-    DSA_CursorList = []
-    for i in DSA_cursor:
-        #append the cleaned numbers (removes characters from the unicode string)
-        DSA_CursorList.append(str(i)[3:8])
-    
-   
-     
-    #Determine list length for loop in a bit
-    ListLength = len(DSA_CursorList)
-    
-    #create an empty string selection clause and loop to follow that will create a SQL statement to select only those Adjacent DSA's from the adjacent selection
-    SelectionClause = ""
-    for i in range(0,ListLength):
-        SelectionClause = SelectionClause + DSA_RecClause + " AND " + DSAProv_Field + " = " + DSA_CursorList[i] + " OR " 
-    SelectionClause = SelectionClause[:-4]       
-        
-        
-    #Cursor to select only those DSA's from the DYAD List that are adjacent to the DSA in question.
-    DSA_RecCursor = arcpy.da.SearchCursor(DyadTable,VisitsDyad_Field,SelectionClause)
-    DSA_ProvCursor = arcpy.da.SearchCursor(DyadTable,DSAProv_Field,SelectionClause)
-    
-    #creation of provider DSA's in a list
-    Dyad_List = []
-    for i in DSA_ProvCursor:
-        Dyad_List.append(i)
-  
-    DyadList_Length = len(Dyad_List)
-    for i in range(0,DyadList_Length):
-        temp = str(Dyad_List[i])
-        temp = temp[1:6]
-        Dyad_List[i] = temp        
-    
-    
-    #Create list of the the number of visits in the Dyad and clean it
-    Visits_Dyad_List = []
-    for i in DSA_RecCursor:
-        Visits_Dyad_List.append(i)
-    Visits_Dyad_Length = len(Visits_Dyad_List)
-    
-    #clean the Dyad visit list
-    for i in range(0,Visits_Dyad_Length):
-        temp = str(Visits_Dyad_List[i])
-        temp = temp.replace("(","")
-        temp = temp.replace(")","")
-        temp = temp.replace(",","")
-        temp = int(temp)
-        Visits_Dyad_List[i] = temp        
-    
-    #create temp dictionary and counter that will be used to pull the maximum
-    #visits in the dyad and then write it to the DSA_Revised Attribute
+    #create neighbor field list for use in cursor:
+    NeighborField_List = [f.name for f in arcpy.ListFields(Adjacent_Selection, "8")]
+
+    #create a temporary dictionary
     tempDict = {}
-    count = 0
-       
-    for i in Dyad_List:
-        tempDict[i] = Visits_Dyad_List[count]
-        count = count + 1
+
+    #cursor to select the adjacent polygons that aren't the current Service Area
+    Adjacent_DSA_List = []
+    with arcpy.da.SearchCursor(Adjacent_Selection,NeighborField_List) as cursor:
+        for row in cursor:
+            nbrDSA = row[NeighborField_List.index("ZIP")]
+            DyadLOC = float(currentDSA_Patients_In + row[NeighborField_List.index("Patients_In")]) / float(currentDSA_Patients_Total + row[NeighborField_List.index("Patients_Total")])
+            tempDict[str(nbrDSA)] = DyadLOC
     
-    #check if the currention dictionary is empty, this would be caused by no visits occuring between the current seed any any adjacent DSAs.
-    #if this is the case, the current DSA is removed from the DSA List 
-    if bool(tempDict) == False:
-        #if empty append to removeList
-        removeList.append(currentDSA)
-        #remove current seed from seed list
-        del DSA_List[DSA_List.index(currentDSA)]
-        
-        arcpy.AddMessage("Seed Zip: " + str(currentDSA) + " removed due to generating an empty dictionary...")
+    #pull the DSA that maxmizes LOC with the current DSA in need of reassignment
+    maxDSA = str((max(tempDict, key = tempDict.get)))
 
-    #Return key value for the maximum number of Dyad Visits and ensure it's a string
-    else:      
-        maxDSA = (max(tempDict, key = tempDict.get))        
-        maxDSA = str(maxDSA)    
-      
-
-        #Check to see if DSA has already been reassigned, if so reassign it.
-        CheckClause = DSA_Field +' = '+ "'" + maxDSA + "'"
-        check_Cursor = arcpy.da.SearchCursor(Adjacent_Selection,DSARevised_Field,CheckClause)
-        
-          
-        checkList = []
-        for i in check_Cursor:
-            checkList.append(str(i).strip("()u,'"))
+    #Check of Max DSA has been reassigned to another already
+    if maxDSA in DSA_List:
+        #reassign maxDSA to what the current maxDSA has already been reassigned to
+        if maxDSA in AssignedDict.keys():
+            maxDSA = AssignedDict[maxDSA] #re declare MaxDSA to be equal to what it was assigned to already. If max DSA in DSA List and that DSA has been reassigned, this will take care of that issue.
+        else:
+            #if the above isn't the case then the currentDSA will ned to be re-evaluated later 
+            #create a dictionary of double checks that will be revisited at the end of the loop to take care of needed reassignments
+            DoubleCheckDict[currentDSA] = maxDSA
+            Change_List.append(currentDSA)
             
-        
-
-        #!!!make sure maxDSA doesn't equal "null", otherwise calcualte field will cause a problem.
-        
-        if checkList[0] != 'None':
-            
-            maxDSA = str(checkList[0])
-        
-          
-        #Add DSA to a List  and dictionary to track it
-        DSA_Revised_List.append(maxDSA)
-        AssignedDict[currentDSA] = maxDSA
-
-        arcpy.SetProgressorLabel(str(currentDSA) + " reassinged to " + str(maxDSA))
-       
+    #update the reassigned to field        
+    with arcpy.da.UpdateCursor(OriginalSA,FieldList,whereClause) as cursor:
+        for row in cursor:
+            row[FieldList.index(DSA_RevisedString)] = maxDSA
+    
+    #Determine list length for loop in a bit
+    ListLength = len(Adjacent_DSA_List)
+    
+    #add current DSA to Assigned Dictionary
+    AssignedDict[currentDSA] = maxDSA
 
 
-        #create a check that uses a populated list of DSAs that have been reassigned and their corresponeding reassignments to check
-        #if the current maxDSA has already been reassigned
 
-        #Select the DSA that was originally in need of Reassignment
-        ReAssignSelection = arcpy.SelectLayerByAttribute_management(FeatureLayer,"NEW_SELECTION",whereClause)
-        
-        #Assign the proper Adjacent DSA to the currently selected DSA
-        arcpy.CalculateField_management(FeatureLayer,DSARevised_Field,maxDSA,"PYTHON_9.3","#") 
-
-        arcpy.SetProgressorPosition()
+    arcpy.SetProgressorLabel(str(currentDSA) + " reassinged to " + str(maxDSA))
+    arcpy.SetProgressorPosition()
 
 arcpy.AddMessage("Checking for DSAs that were assigned to a Service Area that was later reassigned...")
-#List of DSA's that where assigned to DSA that was reassigned later 
-Change_List = [] 
-
+"""
 #For loop that will check for DSAs that were assigned to a DSA that was reassigned later and create a list of DSAs that need to be redone   
-for i in DSA_List:
-    if i in DSA_Revised_List:
-        Change_List.append(i)
+for key in DoubleCheckDict:
+    if DoubleCheckDict[key] in AssignedDict:
+        DoubleCheckDict[key] = AssignedDict[DoubleCheckDict[key]]
+    else:
+        pass
+"""
 
 arcpy.AddMessage("DSAs that need to be ammended: " + str(Change_List))
 #Clear selections 
@@ -251,8 +199,12 @@ for i in range(len(Change_List)):
         
         #Select all the DSAs that are in need of assignment correction
         DSARevised_Reassign = arcpy.SelectLayerByAttribute_management(FeatureLayer,"NEW_SELECTION",DSARevised_whereClause)
+        ReAssignedFieldList = [f.name for f in arcpy.ListFields(DSARevised_Reassign, "*")]
         #change the DSA revised field to the correct assignment
-        arcpy.CalculateField_management(FeatureLayer,DSARevised_Field,TempReassignVar,"PYTHON_9.3","#")
+        with arcpy.da.UpdateCursor(DSARevised_Reassign,ReAssignedFieldList,DSARevised_whereClause) as cursor:
+            for row in cursor:
+                row[ReAssignedFieldList.index(DSA_RevisedString)] = TempReassignVar
+                cursor.updateRow(row)
     arcpy.SetProgressorPosition()
 
 arcpy.ResetProgressor()
@@ -262,7 +214,6 @@ arcpy.SelectLayerByAttribute_management(FeatureLayer,"Clear_Selection")
 arcpy.AddMessage("Exporting feature layer to shapefile...")
 #Save layer as a shapfile in a user defined location
 copyFeatures = arcpy.CopyFeatures_management(FeatureLayer,"Temp_FeatureOutput","#","0","0","0") 
-#The following inputs are layers or table views: "OutputFile1"
 
 arcpy.AddMessage("Dissolving current DSA reassignment...")
 #Dissolve output of DSA Reassignment. This is needed to 
@@ -274,7 +225,7 @@ TempDissolve = arcpy.Dissolve_management(copyFeatures,"Temp_Dissolve",DSARevised
 #This part looks for DSAs that are entirely bounded by another service area. DSAs on on the border of the state
 #are removed from potential consideration. 
 ####################
-
+"""
 arcpy.AddMessage("Looking for island DSAs...")
 #Get count of features for progressor tool
 FeatureCount = int(arcpy.GetCount_management(TempDissolve).getOutput(0))
@@ -401,6 +352,6 @@ for feature in TempFeatures:
     if "Temp" in feature:
         arcpy.Delete_management(feature)
         
-
+"""
 arcpy.AddMessage("DSA reassignment Complete!")
 
