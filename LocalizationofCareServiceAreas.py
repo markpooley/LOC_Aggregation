@@ -35,29 +35,42 @@ env.overwriteOutput = True
 #Sort the initial dataset by LOC so DSAs will be appended to a list in ascending order
 #of LOC. The cursor selects all DSAs with an LOC below the defined threshold value
 arcpy.SetProgressor("step","Setting up data...",0,3,1)
+arcpy.AddField_management(OriginalSA,"DSA_Revised_40pct","TEXT")
 OriginalSA = arcpy.Sort_management(OriginalSA,"Temp_shapeFileSorted",[[LOC_Field,"ASCENDING"]])
 
 ThresholdString = float(Threshold) * 100
 ThresholdString = str(int(ThresholdString))
 #add DSA Revised field that will be used to reassign DSAs
+<<<<<<< HEAD
 arcpy.AddMessage("Creating 'DSA_Revised_" + str(ThresholdString) + "pct' field that will be used for reassignment.")
 DSA_RevisedString = "DSA_Revised_" + str(ThresholdString) + "pct" #create a string for a field name generated from user defined threshold
 arcpy.AddField_management(OriginalSA,DSA_RevisedString,"TEXT")
+=======
+arcpy.AddMessage("Creating 'DSA_Revised' field that will be used for reassignment.")
+>>>>>>> TempBranch
 
 #Selection clause used to populate DSA_Revised field
 whereClause_UpdateCursor = LOC_Field + ">" + str(Threshold)
 
+<<<<<<< HEAD
 OriginalSA_FieldList = [f.name for f in arcpy.ListFields(OriginalSA,"*")] #create a list of fields from the input file
 arcpy.AddMessage("field list: " + str(OriginalSA_FieldList))
 
 with arcpy.da.UpdateCursor(OriginalSA,OriginalSA_FieldList,whereClause_UpdateCursor) as DSA_updateCursor:
+=======
+with arcpy.da.UpdateCursor(OriginalSA,[DSA_Field,"DSA_Revised_40pct"],whereClause_UpdateCursor) as DSA_updateCursor:
+>>>>>>> TempBranch
     arcpy.AddMessage("Populating DSA_Revised field with DSAs above the LOC: " + str(Threshold))
     for row in DSA_updateCursor:
         #Populate DSA_Revised field with DSAs that are above the user specified threshold
         row[OriginalSA_FieldList.index(DSA_RevisedString)] = row[OriginalSA_FieldList.index(DSA_Field)]
         DSA_updateCursor.updateRow(row)
 
-DSARevised_Field = "DSA_Revised" # string variable to make selection clauses easier
+DSARevised_Field = "DSA_Revised_40pct" # string variable to make selection clauses easier
+#add revised field to ZCTA table for creating a crosswalk
+arcpy.AddField_management(ZCTAs,DSARevised_Field,"TEXT")
+
+ZCTAFieldList = [f.name for f in arcpy.ListFields_management(ZCTAs, "*")] #create list of from ZCTA fields
 
 arcpy.SetProgressorPosition(1)
 arcpy.AddMessage("Finding DSAs in need of reassignment...")
@@ -73,9 +86,7 @@ with arcpy.da.SearchCursor(OriginalSA,DSA_Field,LOC_Field + ' < ' + str(Threshol
 arcpy.AddMessage(str(len(DSA_List)) + " DSAs are in need of reassignment.")
 
 arcpy.SetProgressorPosition(2)
-#Create a feature layer for the adjacent selection in the loop. I have no idea
-#why this is needed, but for some reason the script fails when trying to select
-#adjacent features on a "regular" shapefile.
+#Create a feature layer for the adjacent selection in the loop. 
 FeatureLayer = arcpy.MakeFeatureLayer_management(OriginalSA,"Temporary_Layer")
 
 AssignedDict ={} #create a dictionary that will house the DSAs that have been reassigned and what they've been reassigned to
@@ -166,6 +177,27 @@ for i in range(0,len(DSA_List)):
     AssignedDict[currentDSA] = maxDSA
 
 
+<<<<<<< HEAD
+=======
+    #create a check that uses a populated list of DSAs that have been reassigned and their corresponeding reassignments to check
+    #if the current maxDSA has already been reassigned
+
+    #Select the DSA that was originally in need of Reassignment
+    ReAssignSelection = arcpy.SelectLayerByAttribute_management(FeatureLayer,"NEW_SELECTION",whereClause)
+    
+    #Assign the proper Adjacent DSA to the currently selected DSA
+    arcpy.CalculateField_management(FeatureLayer,DSARevised_Field,maxDSA,"PYTHON_9.3","#") 
+    with arcpy.da.UpdateCursor(FeatureLayer,DSARevised_Field,whereClause) as cursor:
+        for row in cursor:
+            row[0] = maxDSA
+            cursor.updateRow(row)
+
+    #update cursor that will create ZCTA crosswalk in the assignment process        
+    with arcpy.da.UpdateCursor(ZCTAs,ZCTAFieldList,whereclause) as cursor:
+        for row in cursor:
+            row[ZCTAFieldList.index(DSARevised_Field)] = maxDSA
+            cursor.updateRow(row)
+>>>>>>> TempBranch
 
     arcpy.SetProgressorLabel(str(currentDSA) + " reassinged to " + str(maxDSA))
     arcpy.SetProgressorPosition()
@@ -201,10 +233,25 @@ for i in range(len(Change_List)):
         DSARevised_Reassign = arcpy.SelectLayerByAttribute_management(FeatureLayer,"NEW_SELECTION",DSARevised_whereClause)
         ReAssignedFieldList = [f.name for f in arcpy.ListFields(DSARevised_Reassign, "*")]
         #change the DSA revised field to the correct assignment
+<<<<<<< HEAD
         with arcpy.da.UpdateCursor(DSARevised_Reassign,ReAssignedFieldList,DSARevised_whereClause) as cursor:
             for row in cursor:
                 row[ReAssignedFieldList.index(DSA_RevisedString)] = TempReassignVar
                 cursor.updateRow(row)
+=======
+        arcpy.CalculateField_management(FeatureLayer,DSARevised_Field,TempReassignVar,"PYTHON_9.3","#")
+        with arcpy.da.UpdateCursor(FeatureLayer,DSARevised_Field,DSARevised_whereClause) as cursor:
+            for row in cursor:
+                row[0] = TempReassignVar
+                cursor.updateRow(row)
+        
+        #update ZCTA file to maintain crosswalk integrity
+        with arcpy.da.UpdateCursor(ZCTAs,DSARevised_Field,DSARevised_whereClause) as cursor:
+            for row in cursor:
+                row[0] = TempReassignVar
+                cursor.updateRow(row)
+
+>>>>>>> TempBranch
     arcpy.SetProgressorPosition()
 
 arcpy.ResetProgressor()
